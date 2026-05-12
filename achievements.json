@@ -1,0 +1,122 @@
+{
+  "first_steps": {
+    "unlocked": true,
+    "progress": 1
+  },
+  "beginner": {
+    "unlocked": true,
+    "progress": 1000
+  },
+  "intermediate": {
+    "unlocked": true,
+    "progress": 10000
+  },
+  "master": {
+    "unlocked": false,
+    "progress": 0
+  },
+  "legend": {
+    "unlocked": false,
+    "progress": 0
+  },
+  "overtake_10": {
+    "unlocked": true,
+    "progress": 10
+  },
+  "overtake_50": {
+    "unlocked": false,
+    "progress": 0
+  },
+  "overtake_100": {
+    "unlocked": false,
+    "progress": 0
+  },
+  "overtake_500": {
+    "unlocked": false,
+    "progress": 0
+  },
+  "streak_5": {
+    "unlocked": true,
+    "progress": 5
+  },
+  "streak_10": {
+    "unlocked": true,
+    "progress": 10
+  },
+  "streak_20": {
+    "unlocked": true,
+    "progress": 20
+  },
+  "streak_30": {
+    "unlocked": false,
+    "progress": 0
+  },
+  "city_complete": {
+    "unlocked": true,
+    "progress": 1
+  },
+  "highway_complete": {
+    "unlocked": true,
+    "progress": 1
+  },
+  "circuit_complete": {
+    "unlocked": false,
+    "progress": 0
+  },
+  "all_levels": {
+    "unlocked": false,
+    "progress": 0
+  },
+  "collector": {
+    "unlocked": false,
+    "progress": 2
+  },
+  "hoarder": {
+    "unlocked": false,
+    "progress": 2
+  },
+  "nitro_lover": {
+    "unlocked": false,
+    "progress": 2
+  },
+  "shield_master": {
+    "unlocked": false,
+    "progress": 0
+  },
+  "no_damage": {
+    "unlocked": false,
+    "progress": 0
+  },
+  "nitro_overtake": {
+    "unlocked": false,
+    "progress": 0
+  },
+  "slow_master": {
+    "unlocked": false,
+    "progress": 0
+  },
+  "survivor": {
+    "unlocked": false,
+    "progress": 0
+  },
+  "marathon": {
+    "unlocked": false,
+    "progress": 0
+  },
+  "speed_demon": {
+    "unlocked": false,
+    "progress": 0
+  },
+  "secret_nitro": {
+    "unlocked": false,
+    "progress": 0
+  },
+  "secret_perfect": {
+    "unlocked": true,
+    "progress": 1
+  },
+  "secret_close": {
+    "unlocked": false,
+    "progress": 0
+  }
+}
