@@ -9,6 +9,53 @@ import math
 import settings as S
 
 
+class BonusEffect:
+    """
+    Effet de bonus appliqué à la voiture.
+
+    Rôle: Encapsuler type, durée et magnitude.
+    Paramètres: type (str), duration (frames), magnitude.
+    Dépendances: car.Player.
+    """
+
+    DURATION = {
+        "slow": S.BONUS_SLOW_DURATION,
+        "magnet": S.BONUS_MAGNET_DURATION,
+        "ghost": S.BONUS_GHOST_DURATION,
+        "time_freeze": S.BONUS_TIME_FREEZE_DURATION,
+    }
+
+    def __init__(self, effect_type: str, duration: float = None, magnitude: float = 1.0):
+        self.effect_type = effect_type
+        self.duration = duration if duration is not None else self.DURATION.get(effect_type, 0)
+        self.magnitude = magnitude
+        self.timer = self.duration
+
+    def apply_to(self, car) -> dict:
+        """
+        Applique l'effet immédiat sur la voiture.
+
+        Returns:
+            dict des modifications (nitro_add, shield_add, etc.)
+        """
+        result = {"nitro_add": 0, "shield_add": 0, "life_add": 0, "activated": self.effect_type}
+        t = self.effect_type
+        if t == "nitro":
+            result["nitro_add"] = int(S.BONUS_NITRO_ADD * self.magnitude)
+        elif t == "shield":
+            result["shield_add"] = int(S.BONUS_SHIELD_ADD * self.magnitude)
+        elif t == "life":
+            result["life_add"] = 1
+        elif t == "ghost" and hasattr(car, "activate_ghost"):
+            car.activate_ghost(int(self.duration * self.magnitude))
+        return result
+
+    def tick(self, dt: float) -> bool:
+        """Retourne True si l'effet est terminé."""
+        self.timer -= dt
+        return self.timer <= 0
+
+
 class Bonus:
     """Un bonus collectible sur la route."""
 
@@ -87,12 +134,16 @@ class Bonus:
 class BonusManager:
     """Gère la liste des bonus actifs et applique leurs effets."""
 
-    def __init__(self, road_x: int, road_w: int, lane_count: int, use_extended: bool = True):
+    def __init__(self, road_x: int, road_w: int, lane_count: int, use_extended: bool = True,
+                 difficulty_mult: float = 1.0):
         self.road_x     = road_x
         self.road_w     = road_w
         self.lane_count = lane_count
         self.use_extended = use_extended
         self.bonuses: list[Bonus] = []
+        dm = max(0.5, min(1.5, float(difficulty_mult)))
+        # Facile : un peu plus de bonus ; difficile : un peu moins
+        self._spawn_scale = 1.0 + (1.0 - dm) * 0.35 - max(0.0, dm - 1.0) * 0.25
 
         # Timers pour les bonus à durée
         self.slow_timer = 0.0
@@ -113,8 +164,8 @@ class BonusManager:
         return self._font
 
     # ----------------------------------------------------------
-    def update(self, dt: float, speed: float, player_rect: pygame.Rect, 
-               player_x: float = None, player_y: float = None) -> dict:
+    def update(self, dt: float, speed: float, player_rect: pygame.Rect,
+               player_x: float = None, player_y: float = None, car=None) -> dict:
         """
         Met à jour les bonus et détecte les collectes.
 
@@ -141,8 +192,8 @@ class BonusManager:
         if player_y is not None:
             self.player_y = player_y
 
-        # Spawn aléatoire
-        if random.random() < S.BONUS_SPAWN_PROB * dt:
+        # Spawn aléatoire (probabilité liée à la difficulté menu)
+        if random.random() < S.BONUS_SPAWN_PROB * dt * self._spawn_scale:
             self.bonuses.append(
                 Bonus(self.road_x, self.road_w, self.lane_count, self.use_extended)
             )
@@ -182,23 +233,24 @@ class BonusManager:
                 result["score_add"] += S.BONUS_SCORE
                 result["collected"].append(b.kind)
 
-                if b.kind == "nitro":
-                    result["nitro_add"]  += S.BONUS_NITRO_ADD
-                elif b.kind == "shield":
-                    result["shield_add"] += S.BONUS_SHIELD_ADD
-                elif b.kind == "life":
-                    result["life_add"]   += 1
-                elif b.kind == "slow":
-                    self.slow_timer       = S.BONUS_SLOW_DURATION
-                    result["slow"]        = True
+                effect = BonusEffect(b.kind)
+                applied = effect.apply_to(car) if car is not None else effect.apply_to(
+                    type("_Car", (), {"activate_ghost": lambda s, d: None})())
+                result["nitro_add"] += applied.get("nitro_add", 0)
+                result["shield_add"] += applied.get("shield_add", 0)
+                result["life_add"] += applied.get("life_add", 0)
+
+                if b.kind == "slow":
+                    self.slow_timer = effect.duration
+                    result["slow"] = True
                 elif b.kind == "magnet":
-                    self.magnet_timer     = S.BONUS_MAGNET_DURATION
-                    result["magnet"]      = True
+                    self.magnet_timer = effect.duration
+                    result["magnet"] = True
                 elif b.kind == "ghost":
-                    self.ghost_timer      = S.BONUS_GHOST_DURATION
-                    result["ghost"]       = True
+                    self.ghost_timer = effect.duration
+                    result["ghost"] = True
                 elif b.kind == "time_freeze":
-                    self.time_freeze_timer = S.BONUS_TIME_FREEZE_DURATION
+                    self.time_freeze_timer = effect.duration
                     result["time_freeze"] = True
 
         for b in to_remove:

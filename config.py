@@ -5,7 +5,8 @@
 
 import json
 import os
-from typing import Dict, Any
+import pygame
+from typing import Any
 
 
 class ConfigManager:
@@ -142,7 +143,19 @@ class ConfigManager:
             "return": pygame.K_RETURN,
         }
         binding = self.data.get(f"key_{action}", self.DEFAULTS.get(f"key_{action}"))
-        return key_map.get(binding, pygame.K_SPACE)
+        code = key_map.get(binding)
+        if code is not None:
+            return code
+        fallbacks = {
+            "left": pygame.K_LEFT,
+            "right": pygame.K_RIGHT,
+            "up": pygame.K_UP,
+            "down": pygame.K_DOWN,
+            "nitro": pygame.K_SPACE,
+            "shield": pygame.K_b,
+            "pause": pygame.K_p,
+        }
+        return fallbacks.get(action, pygame.K_SPACE)
 
 
 # Singleton global

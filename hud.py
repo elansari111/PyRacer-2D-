@@ -62,7 +62,9 @@ class HUD:
              objective_pct: float, objective_label: str,
              active_effects: list = None,
              enemies: list = None,
-             player_y: float = None):
+             player_y: float = None,
+             map_id: str = None,
+             map_level: int = 1):
         """Dessine tous les éléments du HUD."""
 
         W, H = surface.get_size()
@@ -85,15 +87,23 @@ class HUD:
             heart = self.font_emoji.render("♥", True, S.C_MAGENTA)
             surface.blit(heart, (W - 26 - i * 24, 10))
 
-        # ---- Vitesse ----
-        spd_txt = self.font_med.render(f"{int(speed * 30)} km/h", True, S.C_YELLOW)
-        surface.blit(spd_txt, (W - spd_txt.get_width() - 12, 34))
+        # ---- Vitesse (compteur analogique, bas-droite) ----
+        self._draw_speedometer(surface, W - 58, H - 118, speed)
+        spd_txt = self.font_small.render(f"{int(speed * 30)} km/h", True, S.C_YELLOW)
+        surface.blit(spd_txt, spd_txt.get_rect(right=W - 14, top=H - 78))
 
-        # ---- Niveau ----
-        lvl_name = S.LEVEL_NAMES[level]
-        lvl_col  = S.LEVEL_COLORS[level]
-        lvl_txt  = self.font_small.render(f"NIV.{level + 1} — {lvl_name}", True, lvl_col)
-        surface.blit(lvl_txt, (W - lvl_txt.get_width() - 12, 52))
+        # ---- Carte / niveau (haut-droite, sous les vies) ----
+        map_names = {"city": "VILLE", "highway": "AUTOROUTE", "circuit": "CIRCUIT"}
+        if map_id and map_id in map_names:
+            lvl_label = f"{map_names[map_id]} — NIV.{map_level}"
+            lvl_col = {"city": S.C_CYAN, "highway": S.C_MAGENTA, "circuit": S.C_YELLOW}.get(
+                map_id, S.C_WHITE)
+        else:
+            lvl_idx = min(level, len(S.LEVEL_NAMES) - 1)
+            lvl_label = f"NIV.{level + 1} — {S.LEVEL_NAMES[lvl_idx]}"
+            lvl_col = S.LEVEL_COLORS[lvl_idx]
+        lvl_txt = self.font_small.render(lvl_label, True, lvl_col)
+        surface.blit(lvl_txt, (W - lvl_txt.get_width() - 12, 36))
 
         # ---- Jauges (centre) ----
         cx = W // 2
@@ -119,7 +129,7 @@ class HUD:
         bx = S.ROAD_X + 2
         by = S.SCREEN_H - 14
         pygame.draw.rect(surface, (255, 255, 255, 20), (bx, by, bw, 8), border_radius=4)
-        fill_col = S.LEVEL_COLORS[level]
+        fill_col = S.LEVEL_COLORS[min(level, len(S.LEVEL_COLORS) - 1)]
         pygame.draw.rect(surface, fill_col,
                          (bx, by, int(bw * min(1.0, objective_pct)), 8),
                          border_radius=4)
@@ -158,6 +168,18 @@ class HUD:
             pygame.draw.rect(flash, (*S.C_MAGENTA, a),
                              (0, 0, W, H), border)
             surface.blit(flash, (0, 0))
+
+    def _draw_speedometer(self, surface, cx, cy, speed: float, max_kmh: float = 220):
+        """Compteur analogique (arc + aiguille)."""
+        radius = 32
+        rect = pygame.Rect(cx - radius, cy - radius, radius * 2, radius * 2)
+        pygame.draw.arc(surface, (60, 60, 80), rect, math.pi * 0.75, math.pi * 2.25, 3)
+        ratio = min(1.0, (speed * 30) / max_kmh)
+        angle = math.pi * 0.75 + ratio * math.pi * 1.5
+        nx = cx + math.cos(angle) * (radius - 8)
+        ny = cy + math.sin(angle) * (radius - 8)
+        pygame.draw.line(surface, S.C_YELLOW, (cx, cy), (int(nx), int(ny)), 3)
+        pygame.draw.circle(surface, S.C_CYAN, (cx, cy), 4)
 
     # ----------------------------------------------------------
     def _draw_gauge(self, surface, x, y, w, h, pct, color, label,

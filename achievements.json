@@ -64,20 +64,20 @@
     "progress": 0
   },
   "all_levels": {
-    "unlocked": false,
-    "progress": 0
+    "unlocked": true,
+    "progress": 1
   },
   "collector": {
     "unlocked": false,
-    "progress": 2
+    "progress": 6
   },
   "hoarder": {
     "unlocked": false,
-    "progress": 2
+    "progress": 6
   },
   "nitro_lover": {
     "unlocked": false,
-    "progress": 2
+    "progress": 14
   },
   "shield_master": {
     "unlocked": false,
@@ -96,16 +96,16 @@
     "progress": 0
   },
   "survivor": {
-    "unlocked": false,
-    "progress": 0
+    "unlocked": true,
+    "progress": 60
   },
   "marathon": {
     "unlocked": false,
     "progress": 0
   },
   "speed_demon": {
-    "unlocked": false,
-    "progress": 0
+    "unlocked": true,
+    "progress": 350
   },
   "secret_nitro": {
     "unlocked": false,

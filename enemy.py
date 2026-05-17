@@ -287,13 +287,18 @@ class Enemy:
 class EnemySpawner:
     """Contrôle l'apparition des ennemis avec difficulté adaptative progressive."""
 
-    def __init__(self, level: int, road_x: int, road_w: int):
+    def __init__(self, level: int, road_x: int, road_w: int, difficulty_mult: float = 1.0,
+                 map_id: str = "city", max_enemies: int = 12):
         self.level      = level
         self.road_x     = road_x
         self.road_w     = road_w
-        self.lane_count = S.LANE_COUNT[level]
+        self.map_id     = map_id
+        self.max_enemies = max_enemies
+        lane_idx = min(level, len(S.LANE_COUNT) - 1)
+        self.lane_count = S.LANE_COUNT[lane_idx] if map_id != "highway" else 4
         self._timer     = 0
-        self._diff_time = 0     # temps écoulé pour la difficulté
+        self._diff_time = 0
+        self.difficulty_mult = max(0.5, min(1.5, float(difficulty_mult)))
         
         # NOUVEAU: Système de difficulté adaptative
         self._player_skill_rating = 1.0  # 0.5 = facile, 1.0 = normal, 1.5 = difficile
@@ -301,26 +306,34 @@ class EnemySpawner:
         self._spawn_count = 0
         self._intensity_phase = 0  # 0-3 phases d'intensité
 
-    def update(self, dt: float, player_speed: float) -> list:
+    def update(self, dt: float, player_speed: float, current_count: int = 0) -> list:
         """Retourne une liste de nouveaux Enemy à ajouter avec difficulté adaptative."""
+        if current_count >= self.max_enemies:
+            return []
         self._timer    += dt
         self._diff_time += dt
 
         # NOUVEAU: Difficulté adaptative basée sur le temps et la vitesse
-        base_interval = S.SPAWN_INTERVAL[self.level]
+        dm = self.difficulty_mult
+        base_interval = S.SPAWN_INTERVAL[self.level] / dm
         
-        # 1. Réduction progressive du temps de spawn
-        time_factor = self._diff_time * 0.25
+        # 1. Réduction progressive du temps de spawn (plus rapide en mode difficile)
+        time_factor = self._diff_time * 0.25 * dm
         
         # 2. Augmentation si joueur rapide (skill-based)
-        speed_ratio = player_speed / (S.MAX_SPEED[self.level] * 0.7)
-        speed_factor = max(0, (speed_ratio - 1.0) * 20)  # Bonus si joueur va vite
+        lvl_idx = min(self.level, len(S.MAX_SPEED) - 1)
+        speed_ratio = player_speed / (S.MAX_SPEED[lvl_idx] * 0.7)
+        speed_factor = max(0, (speed_ratio - 1.0) * 20) * dm  # Bonus si joueur va vite
         
         # 3. Phase d'intensité (vagues)
-        phase_intensity = self._intensity_phase * 15
+        phase_intensity = self._intensity_phase * 15 * dm
         
-        interval = max(
+        interval_floor = max(
             S.SPAWN_INTERVAL_MIN,
+            int(S.SPAWN_INTERVAL_MIN + max(0.0, 1.0 - dm) * 22),
+        )
+        interval = max(
+            interval_floor,
             base_interval - time_factor - speed_factor - phase_intensity
         )
 
@@ -338,11 +351,14 @@ class EnemySpawner:
                 spawn_count = 2  # Spawn double occasionnel
             
             for _ in range(spawn_count):
-                enemy = Enemy(self.road_x, self.road_w,
-                             self.lane_count, etype, player_speed)
+                type_name = EnemyFactory.type_for_map(self.map_id, self.level + 1, player_speed)
+                enemy = EnemyFactory.create(
+                    type_name, self.map_id, self.level + 1,
+                    self.road_x, self.road_w, self.lane_count, player_speed)
                 # NOUVEAU: Vitesse augmentée selon difficulté
                 speed_boost = 1.0 + (self._intensity_phase * 0.1) + (self._diff_time * 0.001)
-                enemy.speed *= min(1.3, speed_boost)  # Max 30% plus vite
+                speed_boost += max(0.0, dm - 1.0) * 0.12
+                enemy.speed *= min(1.35, speed_boost)
                 new_enemies.append(enemy)
             
             # NOUVEAU: Augmenter la phase d'intensité toutes les 30 spawns
@@ -354,13 +370,14 @@ class EnemySpawner:
     # NOUVEAU: Sélection intelligente du type d'ennemi
     def _select_enemy_type(self, player_speed: float) -> int:
         """Sélectionne le type d'ennemi selon la situation."""
-        types = S.ENEMY_TYPES_BY_LEVEL[self.level].copy()
+        lvl_idx = min(self.level, len(S.ENEMY_TYPES_BY_LEVEL) - 1)
+        types = S.ENEMY_TYPES_BY_LEVEL[lvl_idx].copy()
         
         # Pondération selon difficulté
         weights = [1.0] * len(types)
         
         # Si joueur va vite: plus d'ennemis rapides et imprévisibles
-        if player_speed > S.MAX_SPEED[self.level] * 0.8:
+        if player_speed > S.MAX_SPEED[lvl_idx] * 0.8:
             for i, t in enumerate(types):
                 if t in [1, 3]:  # rapide, imprévisible
                     weights[i] = 1.5
@@ -380,3 +397,106 @@ class EnemySpawner:
         # Récompense: ralentir un peu le spawn après une série
         if streak > 5:
             self._timer = max(0, self._timer - 20)  # Petite pause
+
+
+# ============================================================
+#  Sous-classes par type + Factory
+# ============================================================
+
+TYPE_NAME_TO_ID = {
+    "standard": 0,
+    "fast": 1,
+    "truck": 2,
+    "unpredictable": 3,
+    "police": 1,
+    "rival": 1,
+}
+
+
+class StandardEnemy(Enemy):
+    """Ennemi standard — tient sa voie."""
+
+    def __init__(self, road_x, road_w, lane_count, player_speed, **_):
+        super().__init__(road_x, road_w, lane_count, 0, player_speed)
+
+
+class FastEnemy(Enemy):
+    """Ennemi rapide — accélérations soudaines."""
+
+    def __init__(self, road_x, road_w, lane_count, player_speed, **_):
+        super().__init__(road_x, road_w, lane_count, 1, player_speed)
+
+
+class TruckEnemy(Enemy):
+    """Camion — lent et large."""
+
+    def __init__(self, road_x, road_w, lane_count, player_speed, **_):
+        super().__init__(road_x, road_w, lane_count, 2, player_speed)
+        self.w = int(self.w * 1.15)
+
+
+class UnpredictableEnemy(Enemy):
+    """Changements de voie fréquents."""
+
+    def __init__(self, road_x, road_w, lane_count, player_speed, **_):
+        super().__init__(road_x, road_w, lane_count, 3, player_speed)
+
+
+class PoliceCar(FastEnemy):
+    """Voiture police — poursuite si excès de vitesse."""
+
+    def __init__(self, road_x, road_w, lane_count, player_speed, **_):
+        super().__init__(road_x, road_w, lane_count, player_speed)
+        self.color = (0, 80, 200)
+        self.is_police = True
+        self.chase_mode = False
+
+    def update(self, dt, player_speed, player_lane=None, player_x=None, player_y=None, player_w=None):
+        if player_speed > 8.0:
+            self.chase_mode = True
+            self._speed_boost = player_speed * 0.3
+        super().update(dt, player_speed, player_lane, player_x, player_y, player_w)
+
+
+class EnemyFactory:
+    """
+    Fabrique d'ennemis selon type, carte et niveau.
+
+    Rôle: Instancier la bonne sous-classe Enemy.
+    Paramètres: type (str), map_id, level.
+    Dépendances: maps.map_config.
+    """
+
+    _classes = {
+        "standard": StandardEnemy,
+        "fast": FastEnemy,
+        "truck": TruckEnemy,
+        "unpredictable": UnpredictableEnemy,
+        "police": PoliceCar,
+        "rival": FastEnemy,
+    }
+
+    @classmethod
+    def create(cls, enemy_type: str, map_id: str, level: int,
+               road_x: int, road_w: int, lane_count: int,
+               player_speed: float) -> Enemy:
+        """Crée un ennemi typé pour la carte donnée."""
+        key = enemy_type.lower()
+        klass = cls._classes.get(key, StandardEnemy)
+        return klass(
+            road_x=road_x,
+            road_w=road_w,
+            lane_count=lane_count,
+            player_speed=player_speed,
+            map_id=map_id,
+            level=level,
+        )
+
+    @classmethod
+    def type_for_map(cls, map_id: str, level: int, player_speed: float) -> str:
+        """Sélection pondérée selon la carte."""
+        from maps.map_config import MapConfig, get_map_definition
+        cfg_map = {"city": MapConfig.CITY, "highway": MapConfig.HIGHWAY, "circuit": MapConfig.CIRCUIT}
+        mcfg = cfg_map.get(map_id, MapConfig.CITY)
+        defn = get_map_definition(mcfg, level)
+        return random.choice(defn.enemy_types) if defn.enemy_types else "standard"

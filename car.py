@@ -3,6 +3,7 @@
 #  car.py — Classe Player
 # ============================================================
 
+import math
 import pygame
 import settings as S
 from config import config
@@ -50,8 +51,13 @@ class Player:
         self.lives        = S.MAX_LIVES
 
         # Animation
-        self.anim_tilt    = 0.0   # inclinaison visuelle lors des virages
+        self.anim_tilt    = 0.0
         self.trail_alpha  = 0
+        self.wheel_angle  = 0.0
+        self.frame_index  = 0
+        self._bob_phase   = 0.0
+        self.hp           = 100.0
+        self.max_hp       = 100.0
         
         # Ghost mode (traverser les ennemis)
         self.ghost_mode   = False
@@ -92,10 +98,14 @@ class Player:
     def handle_input(self, keys: pygame.key.ScancodeWrapper, dt: float,
                      base_speed: float, max_speed: float):
         """Calcule la vitesse cible et déplace le joueur latéralement."""
-        moving_left  = keys[pygame.K_LEFT]  or keys[pygame.K_a]
-        moving_right = keys[pygame.K_RIGHT] or keys[pygame.K_d]
-        accel        = keys[pygame.K_UP]    or keys[pygame.K_w]
-        brake        = keys[pygame.K_DOWN]  or keys[pygame.K_s]
+        kl = config.get_key_binding("left")
+        kr = config.get_key_binding("right")
+        ku = config.get_key_binding("up")
+        kd = config.get_key_binding("down")
+        moving_left  = keys[kl] or keys[pygame.K_a]
+        moving_right = keys[kr] or keys[pygame.K_d]
+        accel        = keys[ku] or keys[pygame.K_w]
+        brake        = keys[kd] or keys[pygame.K_s]
 
         # --- Vitesse longitudinale ---
         self.target_speed = base_speed
@@ -144,9 +154,26 @@ class Player:
         return False
 
     # ----------------------------------------------------------
+    def update_animation(self, dt: float):
+        """Spritesheet, roues, suspension."""
+        self.wheel_angle += self.speed * 0.05 * dt
+        self._bob_phase += dt * 0.2
+        self.frame_index = int(self._bob_phase) % 8
+
+    def draw_shadow(self, surface: pygame.Surface):
+        """Ombre dynamique sous la voiture."""
+        sx = int(self.x)
+        sy = int(self.y + self.h - 4)
+        shadow = pygame.Surface((self.w, 12), pygame.SRCALPHA)
+        pygame.draw.ellipse(shadow, (0, 0, 0, 70), (0, 0, self.w, 12))
+        surface.blit(shadow, (sx, sy))
+
+    @property
+    def is_damaged_sprite(self) -> bool:
+        return self.hp < self.max_hp * 0.3
+
     def update(self, dt: float):
         """Met à jour les timers bonus / invincibilité."""
-        # Met à jour la distance parcourue
         self.distance_traveled += self.speed * dt * S.PIXELS_TO_METERS
         
         # Met à jour la vitesse max
@@ -191,7 +218,8 @@ class Player:
         """Subit une collision. Retourne True si le jeu doit se terminer."""
         if self.invincible or self.shield_active or self.ghost_mode:
             return False
-        self.lives    -= 1
+        self.lives -= 1
+        self.hp = max(0, self.hp - 34)
         self.invincible = True
         self.inv_timer  = S.INV_DURATION
         return self.lives <= 0
@@ -208,9 +236,11 @@ class Player:
     # ----------------------------------------------------------
     def get_lane(self, road_x: int, lane_w: int) -> int:
         """Calcule la voie actuelle du joueur (0-based)."""
+        if lane_w <= 0:
+            return 0
         relative_x = (self.x + self.w // 2) - road_x
         lane = int(relative_x / lane_w)
-        return max(0, lane)
+        return max(0, min(self.lane_count - 1, lane))
 
     # ----------------------------------------------------------
     def draw(self, surface: pygame.Surface):
@@ -220,6 +250,9 @@ class Player:
 
         px, py = int(self.x), int(self.y)
         w, h   = self.w, self.h
+        bob = int(math.sin(self._bob_phase) * 2)
+        py += bob
+        self.draw_shadow(surface)
 
         # ---- Car Body Cache ----
         # Determine the visual state of the car

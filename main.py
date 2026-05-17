@@ -20,7 +20,15 @@ from sound_manager import SoundManager
 from weather   import WeatherSystem, ParticleEffects
 from achievements import AchievementManager
 from config    import config
-from visual_effects import VisualEffectsManager, GlowEffect, CarRenderer
+from visual_effects import VisualEffectsManager
+from ui.map_select_screen import MapSelectScreen
+from maps.map_config import MapConfig, get_map_definition
+from maps.city_map import CityMap
+from maps.highway_map import HighwayMap
+from maps.circuit_map import CircuitMap
+from render.renderer import SceneRenderer
+from render.road_renderer import RoadRenderer
+from render.lighting import LightingSystem
 
 
 # ============================================================
@@ -80,6 +88,14 @@ class Game:
 
         self.selected_level = 0
         self.current_level = 0
+        self.current_map_id = "city"
+        self.current_map_level = 1
+        self.map_select = MapSelectScreen()
+        self.active_map = None
+        self.map_defn = None
+        self.scene_renderer = SceneRenderer(S.SCREEN_W, S.SCREEN_H)
+        self.road_renderer = RoadRenderer(S.SCREEN_W, S.SCREEN_H)
+        self.lighting = LightingSystem(S.SCREEN_W, S.SCREEN_H)
 
         # Sous-systèmes
         self.player: Player | None = None
@@ -112,8 +128,16 @@ class Game:
 
         # Survie timer niveau 3
         self._survive_timer = 0.0
-        self._shake_timer = 0.0
-        
+        self._slow_motion_factor = 1.0
+        self._slow_motion_timer = 0
+        self._level_complete_shown = False
+        self.play_road_x = S.ROAD_X
+        self.play_road_w = S.ROAD_WIDTH
+        self._circuit_grip = 1.0
+        self._circuit_drs = 1.0
+        self._circuit_state = {}
+        self._last_dt = 1.0
+
         # Callback achievements
         self.achievements.register_callback(self._on_achievement_unlocked)
         
@@ -164,7 +188,8 @@ class Game:
                         selected = self.renderer.menu_get_selected()
                         self.sound_mgr.play("menu_confirm")
                         if selected == "JOUER":
-                            self._start_game()
+                            self.state = State.MAP_SELECT
+                            self.sound_mgr.play("menu_select")
                         elif selected == "PARAMETRES":
                             self.state = State.SETTINGS
                         elif selected == "SUCCES":
@@ -200,12 +225,28 @@ class Game:
                     if event.key in (pygame.K_RETURN, pygame.K_ESCAPE):
                         self.state = State.MENU
 
+                # --- MAP SELECT ---
+                elif self.state == State.MAP_SELECT:
+                    action = self.map_select.handle_event(
+                        event, self.score_mgr.unlocked)
+                    if action == "start":
+                        self.current_map_id, self.current_map_level = self.map_select.get_selection()
+                        self._start_game()
+                    elif action == "menu":
+                        self.state = State.MENU
+                        self.sound_mgr.play_music("menu")
+
+                # --- LEVEL COMPLETE / RACE RANKING ---
+                elif self.state in (State.LEVEL_COMPLETE, State.RACE_RANKING):
+                    if event.key in (pygame.K_RETURN, pygame.K_ESCAPE):
+                        self.state = State.MAP_SELECT
+
                 # --- PLAYING ---
                 elif self.state == State.PLAYING:
-                    if event.key == pygame.K_p:
+                    if event.key == config.get_key_binding("pause"):
                         self.state = State.PAUSE
                         self.sound_mgr.play("menu_select")
-                    elif event.key == pygame.K_SPACE:
+                    elif event.key == config.get_key_binding("nitro"):
                         if self.player.activate_nitro():
                             self.sound_mgr.play("nitro_activate")
                             self.hud.add_popup(
@@ -215,7 +256,7 @@ class Game:
                             self.particle_effects.add_nitro_flame(
                                 self.player.x + self.player.w // 2, 
                                 self.player.y + self.player.h)
-                    elif event.key == pygame.K_b:
+                    elif event.key == config.get_key_binding("shield"):
                         if self.player.activate_shield():
                             self.sound_mgr.play("shield_activate")
                             self.hud.add_popup(
@@ -225,7 +266,7 @@ class Game:
 
                 # --- PAUSE ---
                 elif self.state == State.PAUSE:
-                    if event.key == pygame.K_p:
+                    if event.key == config.get_key_binding("pause"):
                         self.state = State.PLAYING
                         self.sound_mgr.play("menu_select")
                     elif event.key == pygame.K_ESCAPE:
@@ -303,8 +344,10 @@ class Game:
         config.increment_stat("total_distance", int(self._session_distance))
 
     def _start_game(self):
-        self.current_level = self.selected_level
-        self.score_mgr.reset_level()
+        lvl_index = {"city": 0, "highway": 1, "circuit": 2}.get(self.current_map_id, 0)
+        self.current_level = lvl_index
+        self.selected_level = lvl_index
+        self.score_mgr.set_map_level(self.current_map_id, self.current_map_level)
         self._init_level()
         self.state = State.PLAYING
         self.sound_mgr.play_music("race")
@@ -312,13 +355,42 @@ class Game:
         self._session_distance = 0.0
 
     def _init_level(self):
-        lvl = self.current_level
+        cfg_map = {
+            "city": MapConfig.CITY,
+            "highway": MapConfig.HIGHWAY,
+            "circuit": MapConfig.CIRCUIT,
+        }
+        mcfg = cfg_map.get(self.current_map_id, MapConfig.CITY)
+        self.map_defn = get_map_definition(mcfg, self.current_map_level)
+        lvl = min(self.current_level, len(S.LANE_COUNT) - 1)
+        road_w = int(S.ROAD_WIDTH * self.map_defn.road_width_mod)
+        lane_count = 4 if self.current_map_id == "highway" else S.LANE_COUNT[lvl]
+        self.play_road_w = road_w
+        self.play_road_x = S.ROAD_X + (S.ROAD_WIDTH - road_w) // 2
+
         self.road = Road(lvl)
         car_color = config.get("car_color", "cyan")
-        self.player = Player(S.ROAD_X, S.ROAD_WIDTH, S.LANE_COUNT[lvl], car_color)
-        self.player.speed = S.BASE_SPEED[lvl]
-        self.spawner = EnemySpawner(lvl, S.ROAD_X, S.ROAD_WIDTH)
-        self.bonus_mgr = BonusManager(S.ROAD_X, S.ROAD_WIDTH, S.LANE_COUNT[lvl])
+        self.player = Player(self.play_road_x, road_w, lane_count, car_color)
+        self.player.speed = S.BASE_SPEED[lvl] * self.map_defn.friction_mod
+        dm = config.get_difficulty_multiplier()
+        spawner_lvl = min(self.current_map_level - 1, len(S.SPAWN_INTERVAL) - 1)
+        self.spawner = EnemySpawner(
+            spawner_lvl, self.play_road_x, road_w, dm,
+            map_id=self.current_map_id, max_enemies=self.map_defn.max_enemies)
+        self.bonus_mgr = BonusManager(self.play_road_x, road_w, lane_count, True, dm)
+        self.active_map = None
+        if self.current_map_id == "city":
+            self.active_map = CityMap(self.current_map_level, self.play_road_x, road_w)
+        elif self.current_map_id == "highway":
+            self.active_map = HighwayMap(self.current_map_level, self.play_road_x, road_w)
+        elif self.current_map_id == "circuit":
+            self.active_map = CircuitMap(
+                self.current_map_level, self.play_road_x, road_w, lane_count)
+            self.enemies = []
+        self._level_complete_shown = False
+        self._circuit_grip = 1.0
+        self._circuit_drs = 1.0
+        self._circuit_state = {}
         self.hud = HUD()
         self.enemies = []
         self.particles = []
@@ -330,12 +402,25 @@ class Game:
         self._slow_motion_timer = 0
         self._slow_motion_factor = 1.0
         
-        # Météo selon le niveau
-        weather_type = S.WEATHER_BY_LEVEL[lvl] if lvl < len(S.WEATHER_BY_LEVEL) else "clear"
-        self.weather.set_weather(weather_type, intensity=0.3 + lvl * 0.2)
+        # Météo selon la carte (pas l'index legacy — circuit ≠ tempête automatique)
+        weather_by_map = {
+            "city":    ["clear", "clear", "fog"],
+            "highway": ["clear", "rain", "storm"],
+            "circuit": ["clear", "clear", "rain"],
+        }
+        wlist = weather_by_map.get(self.current_map_id, ["clear", "clear", "clear"])
+        widx = min(self.current_map_level - 1, len(wlist) - 1)
+        weather_type = wlist[widx]
+        if self.map_defn and self.map_defn.extra.get("fog"):
+            weather_type = "fog"
+        if self.map_defn and self.map_defn.extra.get("storm"):
+            weather_type = "storm"
+        self.weather.set_weather(weather_type, intensity=0.15 + self.current_map_level * 0.12)
         
         # Réinitialiser les effets visuels
         self.visual_effects.reset()
+        self.visual_effects.screen_effects.vignette_enabled = config.get(
+            "glow_effects", True)
 
     def _next_level(self):
         self.achievements.on_level_completed(
@@ -353,8 +438,6 @@ class Game:
             return
             
         if self.state == State.PLAYING:
-            if self._shake_timer > 0:
-                self._shake_timer -= dt
 
             lvl = self.current_level
             keys = pygame.key.get_pressed()
@@ -370,14 +453,21 @@ class Game:
             time_scale *= self._slow_motion_factor  # Multiplier avec slow-motion crash
             effective_dt = dt * time_scale
 
-            # Bonus "slow" et "ghost"
+            self.lighting.set_tunnel(0.0)
             effective_max = (S.MAX_SPEED[lvl] * S.BONUS_SLOW_FACTOR
                              if self.bonus_mgr.slow_active
                              else S.MAX_SPEED[lvl])
+            is_circuit = isinstance(self.active_map, CircuitMap)
+            circuit_cd = is_circuit and self.active_map.race._countdown > 0
+
+            if is_circuit:
+                effective_max *= self._circuit_grip * self._circuit_drs
 
             # --- Joueur ---
-            self.player.handle_input(keys, effective_dt, S.BASE_SPEED[lvl], effective_max)
+            if not circuit_cd:
+                self.player.handle_input(keys, effective_dt, S.BASE_SPEED[lvl], effective_max)
             self.player.update(effective_dt)
+            self.player.update_animation(effective_dt)
             speed = self.player.speed
             
             # Mise à jour distance session
@@ -418,22 +508,40 @@ class Game:
             # --- Score survie ---
             self.score_mgr.add_time(speed, effective_dt, self.player.nitro_active)
 
-            # --- Spawn ennemis ---
-            new_enemies = self.spawner.update(effective_dt, speed)
-            self.enemies.extend(new_enemies)
-
-            # --- Ennemis ---
-            lane_w = S.ROAD_WIDTH // self.spawner.lane_count
-            player_lane = self.player.get_lane(S.ROAD_X, lane_w)
+            lane_w = max(1, self.play_road_w // max(1, self.player.lane_count))
+            player_lane = self.player.get_lane(self.play_road_x, lane_w)
             near_miss_detected = False
-            
+
+            # --- Course circuit vs IA ---
+            if is_circuit:
+                self._circuit_state = self.active_map.update(
+                    effective_dt, speed, self.player.y,
+                    player_lane, self.player.x, self.player.w)
+                self._circuit_grip = self._circuit_state.get("grip_mod", 1.0)
+                self._circuit_drs = self._circuit_state.get("drs_boost", 1.0)
+                self.enemies = self.active_map.get_rivals()
+                if self._circuit_state.get("lap_complete"):
+                    lap_n = self.active_map.race.player_laps
+                    self.hud.add_popup(
+                        S.SCREEN_W // 2, 180,
+                        f"TOUR {lap_n} / {self.active_map.total_laps}",
+                        S.C_YELLOW)
+                    self.sound_mgr.play("level_complete")
+                pos = self._circuit_state.get("player_position", 1)
+                if pos <= 3 and random.random() < 0.02:
+                    self.score_mgr.add(25)
+            else:
+                new_enemies = self.spawner.update(effective_dt, speed, len(self.enemies))
+                self.enemies.extend(new_enemies)
+
+            # --- Ennemis / Rivaux ---
             for e in self.enemies[:]:
-                # NOUVEAU: Passer les infos joueur pour comportement intelligent
-                e.update(effective_dt, speed, player_lane, 
-                        self.player.x, self.player.y, self.player.w)
-                if e.is_off_screen():
-                    self.enemies.remove(e)
-                    continue
+                if not is_circuit:
+                    e.update(effective_dt, speed, player_lane,
+                             self.player.x, self.player.y, self.player.w)
+                    if e.is_off_screen():
+                        self.enemies.remove(e)
+                        continue
                     
                 # NOUVEAU: Near-Miss Detection (manque de peu)
                 enemy_rect = e.get_rect()
@@ -494,11 +602,16 @@ class Game:
                                and not self.player.shield_active 
                                and not self.player.ghost_mode)
                 if can_collide and self.player.get_rect().colliderect(e.get_rect()):
-                    self._handle_collision(enemy_type=e.type)
+                    rival_name = getattr(e, "name", None)
+                    if rival_name:
+                        self.hud.add_popup(
+                            self.player.x, self.player.y - 30,
+                            f"CONTACT {rival_name}", S.C_RED)
+                    self._handle_collision(enemy_type=getattr(e, "type", 0))
                     return
 
-            # --- Obstacles (Circuit) ---
-            if lvl == 2:
+            # --- Obstacles route (pas en mode course) ---
+            if not is_circuit and lvl == 2:
                 for rect in self.road.get_obstacle_rects():
                     can_collide = (not self.player.invincible 
                                    and not self.player.shield_active
@@ -511,8 +624,39 @@ class Game:
             effects = self.bonus_mgr.update(
                 effective_dt, speed, self.player.get_rect(),
                 self.player.x + self.player.w // 2,
-                self.player.y + self.player.h // 2
+                self.player.y + self.player.h // 2,
+                car=self.player,
             )
+            # Logique carte active (après déplacement joueur)
+            if self.active_map is not None:
+                if isinstance(self.active_map, CityMap):
+                    city_fx = self.active_map.update(effective_dt, speed)
+                    city_fx = self.active_map.check_collisions(
+                        self.player.get_rect(), city_fx, effective_dt)
+                    if city_fx.get("score_penalty"):
+                        self.score_mgr.score = max(
+                            0, self.score_mgr.score + city_fx["score_penalty"])
+                    if city_fx.get("force_slow"):
+                        self.player.speed = min(self.player.speed, 2.5)
+                    if city_fx.get("hit_pedestrian"):
+                        self._handle_collision()
+                        return
+                elif isinstance(self.active_map, HighwayMap):
+                    hw_fx = self.active_map.update(
+                        effective_dt, speed, speed * 30)
+                    self.player.x += hw_fx.get("lateral_drift", 0)
+                    self.player.x = max(
+                        self.play_road_x + 4,
+                        min(self.play_road_x + self.play_road_w - self.player.w - 4,
+                            self.player.x))
+                    if hw_fx.get("visibility", 1.0) < 0.9:
+                        self.lighting.set_tunnel(
+                            max(0.0, 1.0 - hw_fx["visibility"]) * 0.55)
+                elif isinstance(self.active_map, CircuitMap):
+                    if self._circuit_state.get("race_finished") and not self._level_complete_shown:
+                        self._level_complete_shown = True
+                        self._show_level_complete()
+                        return
             self.player.nitro_charge = min(S.NITRO_MAX,
                                             self.player.nitro_charge + effects["nitro_add"])
             self.player.shield_charge = min(S.SHIELD_MAX,
@@ -548,6 +692,8 @@ class Game:
                 if p.life <= 0:
                     self.particles.remove(p)
 
+            self._last_dt = effective_dt
+
             # --- HUD ---
             self.hud.update(effective_dt)
 
@@ -569,8 +715,8 @@ class Game:
         collision_x = self.player.x + self.player.w // 2
         collision_y = self.player.y + self.player.h // 2
         
-        # NOUVEAU: Intensité scale selon type d'ennemi
-        intensity_multipliers = {0: 1.0, 1: 1.3, 2: 1.8, 3: 1.2}  # rapide, camion, imprévisible
+        # NOUVEAU: Intensité scale selon type d'ennemi (0=standard, 1=rapide, 2=camion, 3=imprévisible)
+        intensity_multipliers = {0: 1.0, 1: 1.3, 2: 1.8, 3: 1.2}
         intensity = intensity_multipliers.get(enemy_type, 1.0) * (1.5 if obstacle else 1.0)
         
         # NOUVEAU: Shake scale selon intensité (max 35)
@@ -601,12 +747,28 @@ class Game:
         """Vérifie si l'objectif du niveau est atteint."""
         sc = self.score_mgr
 
+        if self.map_defn and not self._level_complete_shown:
+            if self.current_map_id == "city":
+                target = int(S.TARGET_SCORE * (0.55 + 0.2 * self.current_map_level))
+                if sc.score >= target:
+                    self._level_complete_shown = True
+                    self._show_level_complete()
+                    return
+            elif self.current_map_id == "highway":
+                target_ot = 8 + self.current_map_level * 6
+                if sc.overtakes >= target_ot:
+                    self._level_complete_shown = True
+                    self._show_level_complete()
+                    return
+            elif self.current_map_id == "circuit":
+                return  # géré par tours dans CircuitMap
+
         if lvl == 0 and sc.score >= S.TARGET_SCORE:
             self._show_transition(lvl)
         elif lvl == 1 and sc.overtakes >= S.TARGET_OVERTAKES:
             self._show_transition(lvl)
         elif lvl == 2:
-            self._survive_timer -= dt / S.FPS
+            self._survive_timer -= dt
             self.achievements.on_survival_time(
                 S.SURVIVE_TIME - self._survive_timer, lvl)
             if self._survive_timer <= 0:
@@ -616,8 +778,30 @@ class Game:
         self.achievements.check_score_achievements(int(sc.total_score + sc.score))
         self.achievements.on_distance_traveled(self._session_distance)
 
+    def _show_level_complete(self):
+        if self.state != State.PLAYING:
+            return
+        self.score_mgr.commit_level(
+            map_id=self.current_map_id, map_level=self.current_map_level)
+        pos = 1
+        if isinstance(self.active_map, CircuitMap):
+            pos = self.active_map.race.player_finish_pos
+        self._transition_stats = {
+            "score": self.score_mgr.get_display(),
+            "overtakes": self.score_mgr.overtakes,
+            "bonuses": self.score_mgr.bonuses_col,
+            "max_streak": self.score_mgr.max_streak,
+            "race_position": pos,
+        }
+        if self.current_map_id == "circuit":
+            self.state = State.RACE_RANKING
+        else:
+            self.state = State.LEVEL_COMPLETE
+        self.sound_mgr.play("level_complete")
+
     def _show_transition(self, lvl: int):
-        self.score_mgr.commit_level(lvl)
+        self.score_mgr.commit_level(
+            lvl, map_id=self.current_map_id, map_level=self.current_map_level)
         self._transition_stats = {
             "score": self.score_mgr.get_display(),
             "overtakes": self.score_mgr.overtakes,
@@ -630,7 +814,11 @@ class Game:
         self.sound_mgr.play("level_complete")
 
     def _end_game(self):
-        self.score_mgr.commit_level(self.current_level)
+        self.score_mgr.commit_level(
+            self.current_level,
+            map_id=self.current_map_id,
+            map_level=self.current_map_level,
+        )
         self.state = State.GAMEOVER
         self.sound_mgr.stop_engine()
         self.sound_mgr.play("game_over")
@@ -643,7 +831,44 @@ class Game:
         if self.state == State.MENU:
             self.renderer.draw_menu(
                 self.screen, self.selected_level,
-                self.score_mgr.hi_scores, 1.0)
+                self.score_mgr.hi_scores_legacy, 1.0)
+
+        elif self.state == State.MAP_SELECT:
+            self.map_select.draw(
+                self.screen, self.score_mgr.hi_scores, self.score_mgr.unlocked)
+
+        elif self.state == State.LEVEL_COMPLETE:
+            self.renderer.draw_transition(
+                self.screen, self.current_level,
+                self._transition_stats, True)
+
+        elif self.state == State.RACE_RANKING:
+            self.screen.fill(S.C_BG)
+            font_big = pygame.font.SysFont("orbitron,consolas", 32, bold=True)
+            font = pygame.font.SysFont("consolas", 20, bold=True)
+            pos = self._transition_stats.get("race_position", 1)
+            if pos == 1:
+                title = font_big.render("VICTOIRE !", True, S.C_YELLOW)
+            elif pos <= 3:
+                title = font_big.render(f"PODIUM — {pos}e", True, S.C_CYAN)
+            else:
+                title = font_big.render(f"COURSE TERMINEE — {pos}e", True, S.C_MAGENTA)
+            self.screen.blit(title, title.get_rect(centerx=S.SCREEN_W // 2, centery=70))
+            if isinstance(self.active_map, CircuitMap):
+                secs = self.active_map.race.player_finish_time / S.FPS
+                tm = font.render(
+                    f"Temps: {int(secs) // 60}:{secs % 60:05.2f}", True, (180, 180, 200))
+                self.screen.blit(tm, tm.get_rect(centerx=S.SCREEN_W // 2, centery=115))
+                for i, (name, rk, lap) in enumerate(self.active_map.get_ranking_display()):
+                    is_you = name == "Joueur"
+                    col = S.C_CYAN if is_you else S.C_WHITE
+                    if rk == 1:
+                        col = S.C_YELLOW
+                    line = font.render(f"{rk}. {name}  —  {lap} tours", True, col)
+                    self.screen.blit(line, (S.SCREEN_W // 2 - 160, 150 + i * 34))
+            hint = pygame.font.SysFont("consolas", 14).render(
+                "ENTER: Retour sélection carte", True, (120, 120, 140))
+            self.screen.blit(hint, hint.get_rect(centerx=S.SCREEN_W // 2, centery=S.SCREEN_H - 40))
 
         elif self.state == State.SETTINGS:
             config_data = {
@@ -663,7 +888,16 @@ class Game:
 
             # Fond + route
             self.road.draw(canvas, self.player.speed)
-            
+            if isinstance(self.active_map, CityMap):
+                self.active_map.draw_decor(canvas, self.player.speed)
+            elif isinstance(self.active_map, HighwayMap):
+                self.active_map.draw_decor(canvas, self.player.speed)
+            elif isinstance(self.active_map, CircuitMap):
+                self.active_map.draw_decor(canvas, self.player.speed)
+                self.active_map.draw_race_ui(canvas, self._circuit_state)
+            if isinstance(self.active_map, CityMap):
+                self.active_map.draw_hazards(canvas)
+
             # Particules de skid marks (derrière)
             self.particle_effects.draw(canvas)
             
@@ -674,28 +908,40 @@ class Game:
             self.bonus_mgr.draw(canvas)
             
             # Ennemis avec rendu amélioré
-            car_renderer = CarRenderer()
+            car_renderer = self.visual_effects.car_renderer
             for e in self.enemies:
-                enemy_color = S.ENEMY_COLORS[e.type]
-                speed_ratio = e.speed / self.player.speed if self.player.speed > 0 else 1.0
-                car_renderer.draw_enhanced_enemy(canvas, e, enemy_color, speed_ratio)
+                if hasattr(e, "draw"):
+                    e.draw(canvas)
+                else:
+                    enemy_color = getattr(e, "color", S.ENEMY_COLORS[min(e.type, len(S.ENEMY_COLORS) - 1)])
+                    speed_ratio = e.speed / self.player.speed if self.player.speed > 0 else 1.0
+                    car_renderer.draw_enhanced_enemy(canvas, e, enemy_color, speed_ratio)
                 
             # Particules (devant) - ancien système
             for p in self.particles:
                 p.draw(canvas)
                 
-            # Joueur avec rendu amélioré
+            # Joueur (sprite néon fiable + lueur nitro)
             player_color = S.CAR_COLORS.get(self.player.car_color, S.C_CYAN)
-            car_renderer.draw_enhanced_player(
-                canvas, self.player, player_color,
-                tilt=self.player.anim_tilt,
-                nitro_active=self.player.nitro_active,
-                ghost_mode=self.player.ghost_mode
-            )
+            if self.player.nitro_active:
+                car_renderer.draw_enhanced_player(
+                    canvas, self.player, player_color,
+                    tilt=self.player.anim_tilt, nitro_active=True,
+                    ghost_mode=self.player.ghost_mode)
+            else:
+                self.player.draw(canvas)
             
-            # Météo
-            if config.get("show_weather", True):
+            # Météo (sous le HUD, pas par-dessus tout l'écran blanc)
+            if config.get("show_weather", True) and self.weather.weather_type != "clear":
                 self.weather.draw(canvas)
+
+            self.visual_effects.skidmarks.draw(canvas)
+            # Éclairage désactivé en jeu normal (évite halo blanc) — tunnel autoroute seulement
+            if isinstance(self.active_map, HighwayMap) and self.lighting.tunnel_darkness > 0.25:
+                self.lighting.apply(
+                    canvas, (int(self.player.x), int(self.player.y), self.player.w),
+                    enable_headlights=True)
+            self.road_renderer.draw_rearview(canvas, self.enemies, self.player.y)
 
             # HUD
             lvl = self.current_level
@@ -719,13 +965,21 @@ class Game:
                 active_effects=active_effects,
                 enemies=self.enemies,
                 player_y=self.player.y,
+                map_id=self.current_map_id,
+                map_level=self.current_map_level,
             )
 
             if self.state == State.PAUSE:
                 self.renderer.draw_pause(canvas)
 
             # Appliquer les effets d'écran (shake, flash, vignette)
-            final_canvas = self.visual_effects.apply_screen_effects(canvas)
+            if self.current_map_id == "circuit":
+                self.visual_effects.screen_effects.vignette_enabled = False
+            else:
+                self.visual_effects.screen_effects.vignette_enabled = config.get(
+                    "glow_effects", True)
+            final_canvas = self.visual_effects.apply_screen_effects(
+                canvas, config.get("screen_shake", True))
             
             self.screen.fill((0, 0, 0))
             self.screen.blit(final_canvas, (0, 0))
@@ -739,19 +993,35 @@ class Game:
             self.renderer.draw_gameover(
                 self.screen,
                 score=self.score_mgr.get_display(),
-                hi_score=self.score_mgr.get_hi(self.current_level),
-                new_record=self.score_mgr.is_new_record(self.current_level))
+                hi_score=self.score_mgr.get_hi_map(
+                    self.current_map_id, self.current_map_level),
+                new_record=self.score_mgr.is_new_record(
+                    map_id=self.current_map_id, map_level=self.current_map_level))
 
         elif self.state == State.WIN:
+            hi_vals = list(self.score_mgr.hi_scores.values()) or [0]
             self.renderer.draw_win(
                 self.screen,
                 total_score=int(self.score_mgr.total_score),
-                hi_scores=self.score_mgr.hi_scores)
+                hi_scores=hi_vals)
 
     def _get_objective_display(self):
         lvl = self.current_level
         sc  = self.score_mgr
-        if lvl == 0:
+        if self.current_map_id == "city":
+            target = int(S.TARGET_SCORE * (0.55 + 0.2 * self.current_map_level))
+            pct = sc.score / max(1, target)
+            label = f"{sc.get_display():,} / {target:,} pts"
+        elif self.current_map_id == "highway":
+            target = 8 + self.current_map_level * 6
+            pct = sc.overtakes / max(1, target)
+            label = f"{sc.overtakes} / {target} dépassements"
+        elif self.current_map_id == "circuit" and isinstance(self.active_map, CircuitMap):
+            pct = self.active_map.lap_progress
+            pos = self._circuit_state.get("player_position", 1)
+            label = (f"Tour {self.active_map.current_lap}/{self.active_map.total_laps}"
+                     f"  ·  {pos}e")
+        elif lvl == 0:
             pct   = sc.score / S.TARGET_SCORE
             label = f"{sc.get_display():,} / {S.TARGET_SCORE:,} pts"
         elif lvl == 1:
@@ -761,7 +1031,7 @@ class Game:
             t   = max(0, self._survive_timer)
             pct = t / S.SURVIVE_TIME
             label = f"Survivre : {int(t)}s restantes"
-        return pct, label
+        return min(1.0, pct), label
 
 
 # ============================================================

@@ -228,6 +228,7 @@ class ScreenEffects:
         self.flash_alpha = 0
         self.time_dilation = 1.0
         self.vignette = self._create_vignette()
+        self.vignette_enabled = True
         
     def _create_vignette(self) -> pygame.Surface:
         """Crée une vignette pour l'effet de bord d'écran."""
@@ -238,9 +239,9 @@ class ScreenEffects:
         for y in range(0, self.height, 4):
             for x in range(0, self.width, 4):
                 dist = math.sqrt((x - center_x)**2 + (y - center_y)**2)
-                alpha = int(180 * (dist / max_dist) ** 2)
-                if alpha > 20:
-                    pygame.draw.rect(surf, (0, 0, 5, min(alpha, 120)), 
+                alpha = int(80 * (dist / max_dist) ** 2)
+                if alpha > 8:
+                    pygame.draw.rect(surf, (0, 0, 5, min(alpha, 55)), 
                                    (x, y, 4, 4))
         return surf
         
@@ -269,10 +270,10 @@ class ScreenEffects:
             if self.flash_timer <= 0:
                 self.flash_alpha = 0
                 
-    def apply(self, surface: pygame.Surface) -> pygame.Surface:
+    def apply(self, surface: pygame.Surface, screen_shake_enabled: bool = True) -> pygame.Surface:
         """Applique tous les effets d'écran et retourne la surface modifiée."""
         # Shake offset
-        if self.shake_amount > 0:
+        if screen_shake_enabled and self.shake_amount > 0:
             offset_x = random.uniform(-self.shake_amount, self.shake_amount)
             offset_y = random.uniform(-self.shake_amount, self.shake_amount)
             
@@ -292,8 +293,9 @@ class ScreenEffects:
             flash_surf.fill((*self.flash_color[:3], self.flash_alpha))
             result.blit(flash_surf, (0, 0), special_flags=pygame.BLEND_ADD)
             
-        # Vignette
-        result.blit(self.vignette, (0, 0))
+        # Vignette légère (optionnelle via config dans main)
+        if getattr(self, "vignette_enabled", True):
+            result.blit(self.vignette, (0, 0))
         
         return result
 
@@ -392,10 +394,13 @@ class CarRenderer:
             (x + w - tilt_x, y + h - 4),  # Bas droit
             (x + tilt_x, y + h - 4),      # Bas gauche
         ]
-        pygame.draw.polygon(surface, color, body_points)
-        
-        # Bordure lumineuse
-        pygame.draw.polygon(surface, (*S.C_WHITE[:3], 150), body_points, 2)
+        body_col = (
+            min(255, color[0] + 30),
+            min(255, color[1] + 30),
+            min(255, color[2] + 30),
+        )
+        pygame.draw.polygon(surface, body_col, body_points)
+        pygame.draw.polygon(surface, color, body_points, 2)
         
         # Lignes de détail
         pygame.draw.line(surface, (*S.C_WHITE[:3], 100), 
@@ -505,6 +510,77 @@ class CarRenderer:
                                (x + 4, int(blur_y), w - 8, 2))
 
 
+class SkidmarkLayer:
+    """Traces de pneus persistantes (quadrilatères alpha décroissant)."""
+
+    def __init__(self, max_marks: int = 80):
+        self.marks: list = []
+        self.max_marks = max_marks
+
+    def add(self, x: float, y: float, angle: float, width: float = 8):
+        self.marks.append({"x": x, "y": y, "angle": angle, "w": width, "alpha": 200})
+        if len(self.marks) > self.max_marks:
+            self.marks.pop(0)
+
+    def update(self, dt: float):
+        for m in self.marks:
+            m["alpha"] = max(0, m["alpha"] - 3 * dt)
+
+    def draw(self, surface: pygame.Surface):
+        for m in self.marks:
+            if m["alpha"] <= 0:
+                continue
+            s = pygame.Surface((int(m["w"] * 3), 6), pygame.SRCALPHA)
+            pygame.draw.rect(s, (30, 30, 30, int(m["alpha"])), (0, 0, int(m["w"] * 3), 6))
+            rot = pygame.transform.rotate(s, m["angle"])
+            surface.blit(rot, (int(m["x"]), int(m["y"])))
+
+    def clear(self):
+        self.marks.clear()
+
+
+class PostFXProcessor:
+    """Motion blur, bloom, heat haze (numpy si disponible)."""
+
+    def __init__(self, width: int, height: int):
+        self.width = width
+        self.height = height
+        try:
+            import numpy as np
+            self.np = np
+            self.has_numpy = True
+        except ImportError:
+            self.np = None
+            self.has_numpy = False
+
+    def apply_motion_blur(self, surface: pygame.Surface, alpha: int = 40) -> pygame.Surface:
+        blur = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+        blur.fill((255, 255, 255, alpha))
+        out = surface.copy()
+        out.blit(blur, (0, 0), special_flags=pygame.BLEND_RGBA_SUB)
+        return out
+
+    def apply_bloom(self, surface: pygame.Surface) -> pygame.Surface:
+        if not self.has_numpy:
+            return surface
+        arr = self.np.array(pygame.surfarray.pixels3d(surface))
+        if not (arr > 200).any():
+            return surface
+        small = pygame.transform.smoothscale(surface, (self.width // 2, self.height // 2))
+        small = pygame.transform.smoothscale(small, (self.width, self.height))
+        out = surface.copy()
+        out.blit(small, (0, 0), special_flags=pygame.BLEND_ADD)
+        return out
+
+    def apply_heat_haze(self, surface: pygame.Surface, strength: float = 1.0) -> pygame.Surface:
+        if not self.has_numpy or strength <= 0:
+            return surface
+        arr = self.np.array(pygame.surfarray.pixels3d(surface))
+        shift = int(2 * strength)
+        arr[:, ::3] = self.np.roll(arr[:, ::3], shift, axis=0)
+        return pygame.surfarray.make_surface(arr)
+
+
 class VisualEffectsManager:
     """Gestionnaire central de tous les effets visuels."""
     
@@ -513,10 +589,16 @@ class VisualEffectsManager:
         self.screen_effects = ScreenEffects(screen_width, screen_height)
         self.background = AnimatedBackground(screen_width, screen_height)
         self.car_renderer = CarRenderer()
+        self.skidmarks = SkidmarkLayer()
+        self.post_fx = PostFXProcessor(screen_width, screen_height)
+        self._lod_particles = True
+        self._fps_estimate = 60.0
         
-    def update(self, dt: float, speed: float = 0):
+    def update(self, dt: float, speed: float = 0, fps: float = 60.0):
         """Met à jour tous les effets."""
+        self._fps_estimate = fps
         self.particles.update(dt)
+        self.skidmarks.update(dt)
         self.screen_effects.update(dt)
         self.background.update(dt, speed * 0.1)
         
@@ -528,11 +610,12 @@ class VisualEffectsManager:
         """Dessine les particules."""
         self.particles.draw(surface)
         
-    def apply_screen_effects(self, surface: pygame.Surface) -> pygame.Surface:
+    def apply_screen_effects(self, surface: pygame.Surface, screen_shake_enabled: bool = True) -> pygame.Surface:
         """Applique les effets d'écran."""
-        return self.screen_effects.apply(surface)
+        return self.screen_effects.apply(surface, screen_shake_enabled=screen_shake_enabled)
         
     def reset(self):
         """Réinitialise tous les effets."""
         self.particles.clear()
         self.screen_effects.shake_amount = 0
+        self.skidmarks.clear()

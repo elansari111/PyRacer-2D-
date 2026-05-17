@@ -10,15 +10,18 @@ import settings as S
 
 
 class State(Enum):
-    MENU       = auto()
-    PLAYING    = auto()
-    PAUSE      = auto()
-    TRANSITION = auto()   # entre deux niveaux
-    GAMEOVER   = auto()
-    WIN        = auto()
-    SETTINGS   = auto()   # menu des paramètres
-    ACHIEVEMENTS = auto() # écran des succès
-    CUSTOMIZE  = auto()   # personnalisation voiture
+    MENU           = auto()
+    MAP_SELECT     = auto()   # sélection map + niveau
+    PLAYING        = auto()
+    PAUSE          = auto()
+    TRANSITION     = auto()   # entre deux niveaux (legacy)
+    LEVEL_COMPLETE = auto()   # fin de niveau map
+    RACE_RANKING   = auto()   # classement circuit
+    GAMEOVER       = auto()
+    WIN            = auto()
+    SETTINGS       = auto()
+    ACHIEVEMENTS   = auto()
+    CUSTOMIZE      = auto()
 
 
 # ============================================================
@@ -266,7 +269,11 @@ class ScreenRenderer:
         sc = self.font_giant.render(f"{total_score:,}", True, S.C_YELLOW)
         surface.blit(sc, sc.get_rect(centerx=W // 2, centery=300))
 
-        hi = self.font_small.render(f"Meilleur score toutes niveaux : {max(hi_scores):,}",
+        if isinstance(hi_scores, dict):
+            best = max(hi_scores.values()) if hi_scores else 0
+        else:
+            best = max(hi_scores) if hi_scores else 0
+        hi = self.font_small.render(f"Meilleur score : {best:,}",
                                     True, (180, 180, 180))
         surface.blit(hi, hi.get_rect(centerx=W // 2, centery=360))
 

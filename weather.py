@@ -144,10 +144,11 @@ class WeatherSystem:
     def draw(self, surface):
         """Dessine tous les effets météo."""
         # Éclair
-        if self.flash_timer > 0:
-            alpha = int(200 * (self.flash_timer / self.flash_duration))
+        if self.flash_timer > 0 and self.flash_duration > 0:
+            ratio = self.flash_timer / self.flash_duration
+            alpha = min(120, int(90 * ratio))
             flash = pygame.Surface((self.screen_w, self.screen_h), pygame.SRCALPHA)
-            flash.fill((255, 255, 255, alpha))
+            flash.fill((220, 230, 255, alpha))
             surface.blit(flash, (0, 0))
             
         # Pluie
@@ -165,18 +166,18 @@ class WeatherSystem:
             pygame.draw.circle(surface, (200, 220, 255, alpha),
                              (int(splash["x"]), int(splash["y"])), radius)
             
-        # Brouillard
-        if self.weather_type in ("fog", "storm"):
+        # Brouillard (tempête = pluie + éclairs seulement, pas de voile blanc)
+        if self.weather_type == "fog":
             self._draw_fog(surface)
             
     def _draw_fog(self, surface):
-        """Dessine le brouillard."""
-        fog_intensity = int(80 * self.intensity)
-        # Gradient de brouillard
-        for i in range(0, self.screen_h, 20):
-            alpha = int(fog_intensity * (0.5 + 0.5 * math.sin(i * 0.01)))
-            pygame.draw.rect(surface, (200, 210, 230, alpha),
-                           (0, i, self.screen_w, 20))
+        """Dessine le brouillard (surface SRCALPHA pour transparence réelle)."""
+        fog = pygame.Surface((self.screen_w, self.screen_h), pygame.SRCALPHA)
+        fog_intensity = int(45 * self.intensity)
+        for i in range(0, self.screen_h, 24):
+            alpha = min(70, int(fog_intensity * (0.35 + 0.35 * math.sin(i * 0.012))))
+            pygame.draw.rect(fog, (180, 190, 210, alpha), (0, i, self.screen_w, 24))
+        surface.blit(fog, (0, 0))
 
 
 class ParticleEffects:
