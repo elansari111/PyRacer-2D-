@@ -165,7 +165,8 @@ class BonusManager:
 
     # ----------------------------------------------------------
     def update(self, dt: float, speed: float, player_rect: pygame.Rect,
-               player_x: float = None, player_y: float = None, car=None) -> dict:
+               player_x: float = None, player_y: float = None, car=None,
+               rivals: list = None) -> dict:
         """
         Met à jour les bonus et détecte les collectes.
 
@@ -179,12 +180,14 @@ class BonusManager:
           "ghost": bool,
           "time_freeze": bool,
           "score_add": int,
-          "collected": [kind, ...]   # pour popups / particules
+          "collected": [kind, ...],   # pour popups / particules
+          "rival_collected": [(r, kind, color), ...] # collectés par les rivaux
         }
         """
         result = {"nitro_add": 0, "shield_add": 0, "life_add": 0,
                   "slow": False, "magnet": False, "ghost": False, 
-                  "time_freeze": False, "score_add": 0, "collected": []}
+                  "time_freeze": False, "score_add": 0, "collected": [],
+                  "rival_collected": []}
         
         # Met à jour la position du joueur pour le magnet
         if player_x is not None:
@@ -228,6 +231,7 @@ class BonusManager:
                 to_remove.append(b)
                 continue
 
+            # Collecte par le joueur
             if player_rect.colliderect(b.get_rect()):
                 to_remove.append(b)
                 result["score_add"] += S.BONUS_SCORE
@@ -252,9 +256,30 @@ class BonusManager:
                 elif b.kind == "time_freeze":
                     self.time_freeze_timer = effect.duration
                     result["time_freeze"] = True
+                continue
+
+            # Collecte par les rivaux (si en mode course/circuit)
+            if rivals is not None:
+                rival_collision = False
+                for r in rivals:
+                    if hasattr(r, "get_rect") and r.get_rect().colliderect(b.get_rect()):
+                        to_remove.append(b)
+                        result["rival_collected"].append((r, b.kind, b.color))
+                        
+                        # Applique l'effet au rival
+                        if b.kind == "nitro":
+                            r._nitro_timer = 120.0  # nitro boost pendant 2 sec
+                        elif b.kind == "shield":
+                            r.shield_timer = 150.0  # shield actif pendant 2.5 sec
+                            
+                        rival_collision = True
+                        break
+                if rival_collision:
+                    continue
 
         for b in to_remove:
-            self.bonuses.remove(b)
+            if b in self.bonuses:
+                self.bonuses.remove(b)
 
         return result
 

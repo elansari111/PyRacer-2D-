@@ -68,16 +68,16 @@
     "progress": 1
   },
   "collector": {
-    "unlocked": false,
-    "progress": 6
+    "unlocked": true,
+    "progress": 10
   },
   "hoarder": {
     "unlocked": false,
-    "progress": 6
+    "progress": 15
   },
   "nitro_lover": {
-    "unlocked": false,
-    "progress": 14
+    "unlocked": true,
+    "progress": 20
   },
   "shield_master": {
     "unlocked": false,
@@ -93,7 +93,7 @@
   },
   "slow_master": {
     "unlocked": false,
-    "progress": 0
+    "progress": 2
   },
   "survivor": {
     "unlocked": true,

@@ -23,7 +23,13 @@
   "key_shield": "b",
   "key_pause": "p",
   "player_name": "Player",
-  "total_games": 33,
-  "total_distance": 14234,
-  "best_streak": 0
+  "total_games": 50,
+  "total_distance": 27656,
+  "best_streak": 0,
+  "use_moderngl": false,
+  "bloom_enabled": true,
+  "bloom_intensity": 1.2,
+  "vignette_enabled": true,
+  "vignette_intensity": 0.4,
+  "chromatic_aberration": 0.0
 }

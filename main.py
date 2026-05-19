@@ -102,8 +102,11 @@ class Game:
         self.road: Road | None = None
         self.spawner: EnemySpawner | None = None
         self.bonus_mgr: BonusManager | None = None
-        self.hud: HUD | None = None
         self.score_mgr: ScoreManager = ScoreManager()
+        # Reset des scores élevés pour chaque démarrage du jeu sur l'appareil
+        self.score_mgr.hi_scores = {}
+        self.score_mgr.hi_scores_legacy = [0, 0, 0]
+        self.score_mgr._save()
         
         # Nouveaux systèmes v2.0
         self.sound_mgr = SoundManager()
@@ -137,6 +140,7 @@ class Game:
         self._circuit_drs = 1.0
         self._circuit_state = {}
         self._last_dt = 1.0
+        self._has_tire_wear = False
 
         # Callback achievements
         self.achievements.register_callback(self._on_achievement_unlocked)
@@ -368,7 +372,7 @@ class Game:
         self.play_road_w = road_w
         self.play_road_x = S.ROAD_X + (S.ROAD_WIDTH - road_w) // 2
 
-        self.road = Road(lvl)
+        self.road = Road(lvl, is_circuit=(self.current_map_id == "circuit"))
         car_color = config.get("car_color", "cyan")
         self.player = Player(self.play_road_x, road_w, lane_count, car_color)
         self.player.speed = S.BASE_SPEED[lvl] * self.map_defn.friction_mod
@@ -379,6 +383,7 @@ class Game:
             map_id=self.current_map_id, max_enemies=self.map_defn.max_enemies)
         self.bonus_mgr = BonusManager(self.play_road_x, road_w, lane_count, True, dm)
         self.active_map = None
+        self._has_tire_wear = False
         if self.current_map_id == "city":
             self.active_map = CityMap(self.current_map_level, self.play_road_x, road_w)
         elif self.current_map_id == "highway":
@@ -387,6 +392,7 @@ class Game:
             self.active_map = CircuitMap(
                 self.current_map_level, self.play_road_x, road_w, lane_count)
             self.enemies = []
+            self._has_tire_wear = self.active_map.tires_wear
         self._level_complete_shown = False
         self._circuit_grip = 1.0
         self._circuit_drs = 1.0
@@ -466,6 +472,31 @@ class Game:
             # --- Joueur ---
             if not circuit_cd:
                 self.player.handle_input(keys, effective_dt, S.BASE_SPEED[lvl], effective_max)
+                
+                # NOUVEAU: Collision avec les glissières de sécurité latérales
+                left_border = self.play_road_x + 5
+                right_border = self.play_road_x + self.play_road_w - self.player.w - 5
+                if self.player.x <= left_border:
+                    self.player.x = left_border + 2
+                    if self.player.speed > 2.0:
+                        self.player.speed *= 0.72  # Pénalité de vitesse significative
+                        self.sound_mgr.play("crash")  # Bruit d'impact métallique
+                        self.visual_effects.screen_effects.shake(2.0)
+                        self.visual_effects.particles.emit_sparks(
+                            self.player.x, self.player.y + self.player.h // 2,
+                            count=6, color=S.C_YELLOW, intensity=0.7
+                        )
+                elif self.player.x >= right_border:
+                    self.player.x = right_border - 2
+                    if self.player.speed > 2.0:
+                        self.player.speed *= 0.72
+                        self.sound_mgr.play("crash")
+                        self.visual_effects.screen_effects.shake(2.0)
+                        self.visual_effects.particles.emit_sparks(
+                            self.player.x + self.player.w, self.player.y + self.player.h // 2,
+                            count=6, color=S.C_YELLOW, intensity=0.7
+                        )
+                        
             self.player.update(effective_dt)
             self.player.update_animation(effective_dt)
             speed = self.player.speed
@@ -516,7 +547,9 @@ class Game:
             if is_circuit:
                 self._circuit_state = self.active_map.update(
                     effective_dt, speed, self.player.y,
-                    player_lane, self.player.x, self.player.w)
+                    player_lane, self.player.x, self.player.w,
+                    bonuses=self.bonus_mgr.bonuses,
+                    obstacles=self.road.obstacles)
                 self._circuit_grip = self._circuit_state.get("grip_mod", 1.0)
                 self._circuit_drs = self._circuit_state.get("drs_boost", 1.0)
                 self.enemies = self.active_map.get_rivals()
@@ -601,24 +634,90 @@ class Game:
                 can_collide = (not self.player.invincible 
                                and not self.player.shield_active 
                                and not self.player.ghost_mode)
-                if can_collide and self.player.get_rect().colliderect(e.get_rect()):
-                    rival_name = getattr(e, "name", None)
-                    if rival_name:
-                        self.hud.add_popup(
-                            self.player.x, self.player.y - 30,
-                            f"CONTACT {rival_name}", S.C_RED)
-                    self._handle_collision(enemy_type=getattr(e, "type", 0))
-                    return
-
-            # --- Obstacles route (pas en mode course) ---
-            if not is_circuit and lvl == 2:
-                for rect in self.road.get_obstacle_rects():
-                    can_collide = (not self.player.invincible 
-                                   and not self.player.shield_active
-                                   and not self.player.ghost_mode)
-                    if can_collide and self.player.get_rect().colliderect(rect):
-                        self._handle_collision(obstacle=True)
+                if self.player.get_rect().colliderect(e.get_rect()):
+                    if self.player.shield_active:
+                        rival_name = getattr(e, "name", None)
+                        if is_circuit:
+                            if hasattr(e, "hit") and getattr(e, "collision_timer", 0.0) <= 0.0:
+                                e.hit()
+                                if rival_name:
+                                    self.hud.add_popup(
+                                        e.x, e.y - 30,
+                                        f"SHIELD SMASH {rival_name}", S.C_CYAN)
+                                self.sound_mgr.play("shield_hit")
+                                self.visual_effects.particles.emit_sparks(
+                                    e.x + e.w//2, e.y + e.h//2,
+                                    count=12, color=S.C_CYAN, intensity=1.0
+                                )
+                        else:
+                            # Hors circuit: le bouclier détruit les voitures de trafic
+                            if e in self.enemies:
+                                self.enemies.remove(e)
+                            self.score_mgr.add_overtake(self.player.nitro_active)
+                            self.sound_mgr.play("shield_hit")
+                            self.visual_effects.particles.emit_sparks(
+                                e.x + e.w//2, e.y + e.h//2,
+                                count=12, color=S.C_CYAN, intensity=1.0
+                            )
+                            continue
+                    elif can_collide:
+                        rival_name = getattr(e, "name", None)
+                        if rival_name:
+                            self.hud.add_popup(
+                                self.player.x, self.player.y - 30,
+                                f"CONTACT {rival_name}", S.C_RED)
+                            if hasattr(e, "hit"):
+                                e.hit()
+                        self._handle_collision(enemy_type=getattr(e, "type", 0))
                         return
+
+            # --- Obstacles (carrés jaunes / obstacles de route) ---
+            for obs in self.road.obstacles[:]:
+                obs_rect = pygame.Rect(obs["x"], obs["y"], obs["w"], obs["h"])
+                
+                # Collision avec le joueur
+                if self.player.get_rect().colliderect(obs_rect):
+                    if self.player.shield_active:
+                        self.sound_mgr.play("shield_hit")
+                        self.visual_effects.particles.emit_sparks(
+                            obs["x"] + obs["w"] // 2, obs["y"] + obs["h"] // 2,
+                            count=12, color=S.C_CYAN, intensity=0.8
+                        )
+                    else:
+                        self.player.speed = max(1.5, self.player.speed * 0.5)  # Ralentissement de 50%
+                        self.sound_mgr.play("crash")
+                        self.visual_effects.screen_effects.shake(3.0)
+                        self.visual_effects.particles.emit_sparks(
+                            obs["x"] + obs["w"] // 2, obs["y"] + obs["h"] // 2,
+                            count=12, color=S.C_YELLOW, intensity=0.8
+                        )
+                        self.hud.add_popup(
+                            int(self.player.x + self.player.w // 2), int(self.player.y),
+                            "OBSTACLE! -50%", S.C_RED)
+                    self.road.reset_obstacle(obs)
+                    
+                # Collision avec les rivaux (seulement en mode circuit)
+                elif is_circuit:
+                    for r in self.enemies:
+                        if hasattr(r, "get_rect") and r.get_rect().colliderect(obs_rect):
+                            if getattr(r, "shield_timer", 0.0) > 0.0:
+                                self.sound_mgr.play("shield_hit")
+                                self.visual_effects.particles.emit_sparks(
+                                    obs["x"] + obs["w"] // 2, obs["y"] + obs["h"] // 2,
+                                    count=8, color=S.C_CYAN, intensity=0.6
+                                )
+                            else:
+                                r.actual_speed = max(1.0, r.actual_speed * 0.5)  # L'IA est ralentie aussi !
+                                self.sound_mgr.play("crash")
+                                self.visual_effects.particles.emit_sparks(
+                                    obs["x"] + obs["w"] // 2, obs["y"] + obs["h"] // 2,
+                                    count=8, color=S.C_YELLOW, intensity=0.6
+                                )
+                                self.hud.add_popup(
+                                    int(r.x + r.w // 2), int(r.y),
+                                    f"{r.name} -50%", S.C_YELLOW)
+                            self.road.reset_obstacle(obs)
+                            break
 
             # --- Bonus ---
             effects = self.bonus_mgr.update(
@@ -626,7 +725,18 @@ class Game:
                 self.player.x + self.player.w // 2,
                 self.player.y + self.player.h // 2,
                 car=self.player,
+                rivals=self.enemies if is_circuit else None
             )
+            if effects.get("rival_collected"):
+                for r, kind, color in effects["rival_collected"]:
+                    self.hud.add_popup(
+                        int(r.x + r.w // 2), int(r.y),
+                        f"{r.name} +{kind.upper()}", color)
+                    self.sound_mgr.play("overtake")
+                    self.visual_effects.particles.emit_sparks(
+                        r.x + r.w // 2, r.y + r.h // 2,
+                        count=8, color=color, intensity=0.7
+                    )
             # Logique carte active (après déplacement joueur)
             if self.active_map is not None:
                 if isinstance(self.active_map, CityMap):
@@ -652,6 +762,14 @@ class Game:
                     if hw_fx.get("visibility", 1.0) < 0.9:
                         self.lighting.set_tunnel(
                             max(0.0, 1.0 - hw_fx["visibility"]) * 0.55)
+                    if hw_fx.get("tunnel_boost"):
+                        # Slipstream exit boost
+                        self.player.speed = min(self.player.speed + 0.12 * effective_dt, S.MAX_SPEED[lvl] * 1.25)
+                        if random.random() < 0.25:
+                            self.visual_effects.particles.emit_sparks(
+                                self.player.x + self.player.w // 2, self.player.y + self.player.h,
+                                count=2, color=S.C_CYAN, intensity=0.6
+                            )
                 elif isinstance(self.active_map, CircuitMap):
                     if self._circuit_state.get("race_finished") and not self._level_complete_shown:
                         self._level_complete_shown = True
@@ -949,6 +1067,11 @@ class Game:
             
             active_effects = self.bonus_mgr.get_active_effects()
             
+            # Calcul du temps de course restant sur circuit
+            time_left = None
+            if self.current_map_id == "circuit" and self.active_map is not None:
+                time_left = max(0.0, 90.0 - self.active_map.race.race_time / 60.0)
+
             self.hud.draw(
                 canvas,
                 score=self.score_mgr.get_display(),
@@ -967,6 +1090,10 @@ class Game:
                 player_y=self.player.y,
                 map_id=self.current_map_id,
                 map_level=self.current_map_level,
+                grip_mod=self._circuit_grip,
+                has_tire_wear=self._has_tire_wear,
+                drs_active=self._circuit_state.get("drs_active", False),
+                time_left=time_left,
             )
 
             if self.state == State.PAUSE:

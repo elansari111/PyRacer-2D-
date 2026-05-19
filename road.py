@@ -15,7 +15,7 @@ class Road:
     STRIPE_LEN     = 40
     STRIPE_W       = 2
 
-    def __init__(self, level: int):
+    def __init__(self, level: int, is_circuit: bool = False):
         self.level      = level
         self.lane_count = S.LANE_COUNT[level]
         self.road_x     = S.ROAD_X
@@ -29,9 +29,9 @@ class Road:
         self._buildings = self._gen_buildings()
         self._prepare_building_surfaces()
 
-        # Obstacles fixes (Circuit seulement)
+        # Obstacles fixes (Circuit et niveau 2)
         self.obstacles = []
-        if level == 2:
+        if level == 2 or is_circuit:
             self._gen_obstacles()
 
         # Caches
@@ -91,6 +91,13 @@ class Road:
                 "w": 20, "h": 20,
                 "color": S.C_YELLOW,
             })
+
+    def reset_obstacle(self, obs):
+        """Réinitialise la position d'un obstacle en haut de l'écran."""
+        if obs in self.obstacles:
+            lane = random.randrange(self.lane_count)
+            obs["x"] = self.road_x + self.lane_w * lane + self.lane_w // 2 - 10
+            obs["y"] = random.randint(-800, -200)
 
     # ----------------------------------------------------------
     def update(self, speed: float, dt: float):

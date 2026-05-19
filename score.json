@@ -1,15 +1,6 @@
 {
   "version": 2,
-  "hi_scores": {
-    "city_1": 3360,
-    "highway_1": 7474,
-    "circuit_1": 841,
-    "circuit_2": 20871,
-    "circuit_3": 3446,
-    "highway_2": 6390,
-    "highway_3": 5607,
-    "city_2": 2879
-  },
+  "hi_scores": {},
   "unlocked": {
     "city_1": true,
     "highway_1": true,
@@ -22,8 +13,8 @@
     "city_3": true
   },
   "legacy_levels": [
-    3360,
-    6994,
-    841
+    0,
+    0,
+    0
   ]
 }

@@ -37,12 +37,14 @@ class CircuitMap:
 
     def update(self, dt: float, speed: float, player_y: float,
                player_lane: int = 1, player_x: float = 0,
-               player_w: int = 36) -> dict:
+               player_w: int = 36, bonuses: list = None,
+               obstacles: list = None) -> dict:
         if self.tires_wear:
             self._grip = max(0.45, self._grip - 0.0006 * speed * dt)
 
         result = self.race.update(
-            dt, speed, player_lane, player_x, player_y, player_w)
+            dt, speed, player_lane, player_x, player_y, player_w,
+            bonuses=bonuses, obstacles=obstacles)
         result["grip_mod"] = self._grip
         return result
 

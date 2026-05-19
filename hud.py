@@ -64,7 +64,11 @@ class HUD:
              enemies: list = None,
              player_y: float = None,
              map_id: str = None,
-             map_level: int = 1):
+             map_level: int = 1,
+             grip_mod: float = 1.0,
+             has_tire_wear: bool = False,
+             drs_active: bool = False,
+             time_left: float = None):
         """Dessine tous les éléments du HUD."""
 
         W, H = surface.get_size()
@@ -105,16 +109,67 @@ class HUD:
         lvl_txt = self.font_small.render(lvl_label, True, lvl_col)
         surface.blit(lvl_txt, (W - lvl_txt.get_width() - 12, 36))
 
+        # ---- Temps restant (haut-droite, sous le niveau) ----
+        if time_left is not None:
+            time_str = f"TEMPS: {int(time_left)}s"
+            # Clignotement rouge si le temps est faible (<= 15 secondes)
+            if time_left <= 15:
+                col = S.C_RED if int(pygame.time.get_ticks() / 250) % 2 == 0 else (255, 100, 100)
+            else:
+                col = S.C_YELLOW
+            time_txt = self.font_small.render(time_str, True, col)
+            surface.blit(time_txt, (W - time_txt.get_width() - 12, 56))
+
+        # ---- Indicateur DRS (centre haut, sous le header) ----
+        if drs_active:
+            import math
+            drs_txt = self.font_med.render("DRS ACTIF", True, (0, 255, 180))
+            pulse = abs(math.sin(pygame.time.get_ticks() * 0.007))
+            alpha = int(130 + 125 * pulse)
+            
+            # Rendu avec canal alpha
+            drs_surf = pygame.Surface(drs_txt.get_size(), pygame.SRCALPHA)
+            drs_surf.blit(drs_txt, (0, 0))
+            drs_surf.set_alpha(alpha)
+            
+            bx = W // 2 - drs_txt.get_width() // 2 - 12
+            by = 80
+            bw = drs_txt.get_width() + 24
+            bh = drs_txt.get_height() + 8
+            
+            pygame.draw.rect(surface, (10, 25, 20, 170), (bx, by, bw, bh), border_radius=5)
+            pygame.draw.rect(surface, (0, 255, 180, alpha), (bx, by, bw, bh), width=1, border_radius=5)
+            surface.blit(drs_surf, (bx + 12, by + 4))
+
         # ---- Jauges (centre) ----
         cx = W // 2
-        self._draw_gauge(surface, cx - 70, 14, 140, 10,
-                         nitro_charge / S.NITRO_MAX,
-                         S.C_YELLOW, "NITRO",
-                         active=nitro_active)
-        self._draw_gauge(surface, cx - 70, 36, 140, 10,
-                         shield_charge / S.SHIELD_MAX,
-                         S.C_CYAN, "BOUCLIER",
-                         active=shield_active)
+        if has_tire_wear:
+            # Trois jauges côte à côte (130px de large, centrées)
+            self._draw_gauge(surface, cx - 215, 20, 130, 10,
+                             nitro_charge / S.NITRO_MAX,
+                             S.C_YELLOW, "NITRO",
+                             active=nitro_active)
+            self._draw_gauge(surface, cx - 65, 20, 130, 10,
+                             shield_charge / S.SHIELD_MAX,
+                             S.C_CYAN, "BOUCLIER",
+                             active=shield_active)
+            
+            # Couleur dynamique selon l'usure
+            tire_col = S.C_GREEN if grip_mod > 0.75 else (S.C_YELLOW if grip_mod > 0.55 else S.C_RED)
+            self._draw_gauge(surface, cx + 85, 20, 130, 10,
+                             grip_mod,
+                             tire_col, "PNEUS",
+                             active=(grip_mod < 0.60))
+        else:
+            # Deux jauges empilées (comportement par défaut)
+            self._draw_gauge(surface, cx - 70, 14, 140, 10,
+                             nitro_charge / S.NITRO_MAX,
+                             S.C_YELLOW, "NITRO",
+                             active=nitro_active)
+            self._draw_gauge(surface, cx - 70, 36, 140, 10,
+                             shield_charge / S.SHIELD_MAX,
+                             S.C_CYAN, "BOUCLIER",
+                             active=shield_active)
 
         # ---- Streak ----
         if streak >= S.STREAK_MIN:
